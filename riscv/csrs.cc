@@ -563,7 +563,8 @@ reg_t mie_csr_t::write_mask() const noexcept {
   const reg_t hypervisor_ints = proc->extension_enabled('H') ? MIP_HS_MASK : 0;
   const reg_t coprocessor_ints = (reg_t)proc->any_custom_extensions() << IRQ_COP;
   const reg_t delegable_ints = supervisor_ints | coprocessor_ints;
-  const reg_t all_ints = delegable_ints | hypervisor_ints | MIP_MSIP | MIP_MTIP | MIP_MEIP;
+  const reg_t ibex_fints = 0x7fff0000;
+  const reg_t all_ints = ibex_fints | delegable_ints | hypervisor_ints | MIP_MSIP | MIP_MTIP | MIP_MEIP;
   return all_ints;
 }
 

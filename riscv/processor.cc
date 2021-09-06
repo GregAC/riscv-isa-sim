@@ -379,6 +379,7 @@ void state_t::reset(processor_t* const proc, reg_t max_isa)
   csrmap[CSR_MTVEC] = mtvec = std::make_shared<tvec_csr_t>(proc, CSR_MTVEC);
   csrmap[CSR_MCAUSE] = mcause = std::make_shared<cause_csr_t>(proc, CSR_MCAUSE);
   minstret = 0;
+  mcycle = 0;
   csrmap[CSR_MIE] = mie = std::make_shared<mie_csr_t>(proc, CSR_MIE);
   csrmap[CSR_MIP] = mip = std::make_shared<mip_csr_t>(proc, CSR_MIP);
   auto sip_sie_accr = std::make_shared<generic_int_accessor_t>(this,
@@ -489,6 +490,8 @@ void state_t::reset(processor_t* const proc, reg_t max_isa)
   fflags = 0;
   frm = 0;
   serialized = false;
+
+  nmi = false;
 
 #ifdef RISCV_ENABLE_COMMITLOG
   log_reg_write.clear();
@@ -944,7 +947,8 @@ void processor_t::set_csr(int which, reg_t val)
   reg_t hypervisor_ints = extension_enabled('H') ? MIP_HS_MASK : 0;
   reg_t coprocessor_ints = (reg_t)any_custom_extensions() << IRQ_COP;
   reg_t delegable_ints = supervisor_ints | coprocessor_ints;
-  reg_t all_ints = delegable_ints | hypervisor_ints | MIP_MSIP | MIP_MTIP | MIP_MEIP;
+  reg_t ibex_fints = 0x7fff0000;
+  reg_t all_ints = ibex_fints | delegable_ints | hypervisor_ints | MIP_MSIP | MIP_MTIP | MIP_MEIP;
   auto search = state.csrmap.find(which);
   if (search != state.csrmap.end()) {
     search->second->write(val);
@@ -975,7 +979,6 @@ void processor_t::set_csr(int which, reg_t val)
       VU.vxrm = (val & VCSR_VXRM) >> VCSR_VXRM_SHIFT;
       break;
     case CSR_MINSTRET:
-    case CSR_MCYCLE:
       if (xlen == 32)
         state.minstret = (state.minstret >> 32 << 32) | (val & 0xffffffffU);
       else
@@ -987,9 +990,17 @@ void processor_t::set_csr(int which, reg_t val)
       state.minstret--;
       break;
     case CSR_MINSTRETH:
-    case CSR_MCYCLEH:
       state.minstret = (val << 32) | (state.minstret << 32 >> 32);
       state.minstret--; // See comment above.
+      break;
+    case CSR_MCYCLE:
+      if (xlen == 32)
+        state.mcycle = (state.mcycle >> 32 << 32) | (val & 0xffffffffU);
+      else
+        state.mcycle = val;
+      break;
+    case CSR_MCYCLEH:
+      state.mcycle = (val << 32) | (state.mcycle << 32 >> 32);
       break;
     case CSR_MTVAL2: state.mtval2 = val; break;
     case CSR_MTINST: state.mtinst = val; break;
@@ -1238,8 +1249,19 @@ reg_t processor_t::get_csr(int which, insn_t insn, bool write, bool peek)
       if (!extension_enabled('V'))
         break;
       ret((VU.vxsat << VCSR_VXSAT_SHIFT) | (VU.vxrm << VCSR_VXRM_SHIFT));
-    case CSR_INSTRET:
     case CSR_CYCLE:
+      if (!mcounteren_ok(which))
+          goto throw_illegal;
+      if (!hcounteren_ok(which))
+          goto throw_virtual;
+      if (!scounteren_ok(which)) {
+        if (state.v)
+          goto throw_virtual;
+        else
+          goto throw_illegal;
+      }
+      ret(state.mcycle);
+    case CSR_INSTRET:
     case CSR_HPMCOUNTER3 ... CSR_HPMCOUNTER31:
       if (!mcounteren_ok(which))
           goto throw_illegal;
@@ -1255,16 +1277,28 @@ reg_t processor_t::get_csr(int which, insn_t insn, bool write, bool peek)
         ret(state.minstret);
       else
         ret(0);
-    case CSR_MINSTRET:
     case CSR_MCYCLE:
+      ret(state.mcycle);
+    case CSR_MINSTRET:
     case CSR_MHPMCOUNTER3 ... CSR_MHPMCOUNTER31:
     case CSR_MHPMEVENT3 ... CSR_MHPMEVENT31:
       if (which == CSR_MINSTRET || which == CSR_MCYCLE)
         ret(state.minstret);
       else
         ret(0);
-    case CSR_INSTRETH:
     case CSR_CYCLEH:
+      if (!mcounteren_ok(which) || xlen != 32)
+          goto throw_illegal;
+      if (!hcounteren_ok(which))
+          goto throw_virtual;
+      if (!scounteren_ok(which)) {
+        if (state.v)
+          goto throw_virtual;
+        else
+          goto throw_illegal;
+      }
+      ret(state.mcycle >> 32);
+    case CSR_INSTRETH:
     case CSR_HPMCOUNTER3H ... CSR_HPMCOUNTER31H:
       if (!mcounteren_ok(which) || xlen != 32)
           goto throw_illegal;
@@ -1280,8 +1314,11 @@ reg_t processor_t::get_csr(int which, insn_t insn, bool write, bool peek)
         ret(state.minstret >> 32);
       else
         ret(0);
-    case CSR_MINSTRETH:
     case CSR_MCYCLEH:
+      if (xlen == 32)
+        ret(state.mcycle >> 32);
+      break;
+    case CSR_MINSTRETH:
     case CSR_MHPMCOUNTER3H ... CSR_MHPMCOUNTER31H:
       if (xlen == 32) {
         if (which == CSR_MINSTRETH || which == CSR_MCYCLEH)

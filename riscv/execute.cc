@@ -21,6 +21,11 @@ static void commit_log_stash_privilege(processor_t* p)
   state->last_inst_flen = p->get_flen();
 }
 
+static void commit_log_stash_pc(processor_t* p, reg_t pc)
+{
+  p->get_state()->last_inst_pc = pc;
+}
+
 static void commit_log_print_value(FILE *log_file, int width, const void *data)
 {
   assert(log_file);
@@ -158,6 +163,7 @@ static void commit_log_print_insn(processor_t *p, reg_t pc, insn_t insn)
 static void commit_log_reset(processor_t* p) {}
 static void commit_log_stash_privilege(processor_t* p) {}
 static void commit_log_print_insn(processor_t* p, reg_t pc, insn_t insn) {}
+static void commit_log_stash_pc(processor_t* p, reg_t pc) {}
 #endif
 
 inline void processor_t::update_histogram(reg_t pc)
@@ -190,6 +196,7 @@ static inline reg_t execute_insn(processor_t* p, reg_t pc, insn_fetch_t fetch)
 #ifdef RISCV_ENABLE_COMMITLOG
   } catch (wait_for_interrupt_t &t) {
       if (p->get_log_commits_enabled()) {
+        commit_log_stash_pc(p, pc);
         commit_log_print_insn(p, pc, fetch.insn);
       }
       throw;
@@ -208,6 +215,11 @@ static inline reg_t execute_insn(processor_t* p, reg_t pc, insn_fetch_t fetch)
   } catch(...) {
     throw;
   }
+
+  if (npc != PC_SERIALIZE_BEFORE) {
+    commit_log_stash_pc(p, pc);
+  }
+
   p->update_histogram(pc);
 
   return npc;
@@ -221,6 +233,10 @@ bool processor_t::slow_path()
 // fetch/decode/execute loop
 void processor_t::step(size_t n)
 {
+#ifdef RISCV_ENABLE_COMMITLOG
+  state.last_inst_pc = PC_INVALID;
+#endif
+
   if (!state.debug_mode) {
     if (halt_request == HR_REGULAR) {
       enter_debug_mode(DCSR_CAUSE_DEBUGINT);

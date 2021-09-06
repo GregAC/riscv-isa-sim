@@ -17,6 +17,7 @@
 
 using std::ostream;
 using std::stringstream;
+#define NMI_INTERRUPT_NUM 31
 
 class processor_t;
 class mmu_t;
@@ -175,6 +176,7 @@ struct state_t
   csr_t_p mtvec;
   csr_t_p mcause;
   reg_t minstret;
+  reg_t mcycle;
   mie_csr_t_p mie;
   mip_csr_t_p mip;
   csr_t_p medeleg;
@@ -230,6 +232,8 @@ struct state_t
       STEP_STEPPED
   } single_step;
 
+  bool nmi;
+
 #ifdef RISCV_ENABLE_COMMITLOG
   commit_log_reg_t log_reg_write;
   commit_log_mem_t log_mem_read;
@@ -237,6 +241,7 @@ struct state_t
   reg_t last_inst_priv;
   int last_inst_xlen;
   int last_inst_flen;
+  reg_t last_inst_pc;
 #endif
 };
 
@@ -498,7 +503,14 @@ private:
   static const size_t OPCODE_CACHE_SIZE = 8191;
   insn_desc_t opcode_cache[OPCODE_CACHE_SIZE];
 
-  void take_pending_interrupt() { take_interrupt(state.mip->read() & state.mie->read()); }
+  void take_pending_interrupt() {
+    if (!state.debug_mode && state.nmi) {
+      state.nmi = false;
+      throw trap_t(((reg_t)1 << (max_xlen-1)) | NMI_INTERRUPT_NUM);
+    }
+
+    take_interrupt(state.mip->read() & state.mie->read());
+  }
   void take_interrupt(reg_t mask); // take first enabled interrupt in mask
   void take_trap(trap_t& t, reg_t epc); // take an exception
   void disasm(insn_t insn); // disassemble and print an instruction
