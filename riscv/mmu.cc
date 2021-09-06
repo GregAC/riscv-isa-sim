@@ -68,7 +68,7 @@ tlb_entry_t mmu_t::fetch_slow_path(reg_t vaddr)
   if (auto host_addr = sim->addr_to_mem(paddr)) {
     return refill_tlb(vaddr, paddr, host_addr, FETCH);
   } else {
-    if (!mmio_load(paddr, sizeof fetch_temp, (uint8_t*)&fetch_temp))
+    if (!mmio_load(paddr, sizeof fetch_temp, (uint8_t*)&fetch_temp, true))
       throw trap_instruction_access_fault(vaddr);
     tlb_entry_t entry = {(char*)&fetch_temp - vaddr, paddr - vaddr};
     return entry;
@@ -110,12 +110,12 @@ bool mmu_t::mmio_ok(reg_t addr, access_type type)
   return true;
 }
 
-bool mmu_t::mmio_load(reg_t addr, size_t len, uint8_t* bytes)
+bool mmu_t::mmio_load(reg_t addr, size_t len, uint8_t* bytes, bool iside)
 {
   if (!mmio_ok(addr, LOAD))
     return false;
 
-  return sim->mmio_load(addr, len, bytes);
+  return sim->mmio_load(addr, len, bytes, iside);
 }
 
 bool mmu_t::mmio_store(reg_t addr, size_t len, const uint8_t* bytes)

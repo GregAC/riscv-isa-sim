@@ -315,6 +315,7 @@ void state_t::reset(reg_t max_isa)
   mtvec = 0;
   mcause = 0;
   minstret = 0;
+  mcycle = 0;
   mie = 0;
   mip = 0;
   medeleg = 0;
@@ -348,6 +349,8 @@ void state_t::reset(reg_t max_isa)
   fflags = 0;
   frm = 0;
   serialized = false;
+
+  nmi = false;
 
 #ifdef RISCV_ENABLE_COMMITLOG
   log_reg_write.clear();
@@ -506,8 +509,8 @@ void processor_t::take_interrupt(reg_t pending_interrupts)
 
   if (!state.debug_mode && enabled_interrupts) {
     // nonstandard interrupts have highest priority
-    if (enabled_interrupts >> IRQ_M_EXT)
-      enabled_interrupts = enabled_interrupts >> IRQ_M_EXT << IRQ_M_EXT;
+    if (enabled_interrupts >> (IRQ_M_EXT + 1))
+      enabled_interrupts = enabled_interrupts >> (IRQ_M_EXT + 1) << (IRQ_M_EXT + 1);
     // standard interrupt priority is MEI, MSI, MTI, SEI, SSI, STI
     else if (enabled_interrupts & MIP_MEIP)
       enabled_interrupts = MIP_MEIP;
@@ -524,7 +527,7 @@ void processor_t::take_interrupt(reg_t pending_interrupts)
     else
       abort();
 
-    throw trap_t(((reg_t)1 << (max_xlen-1)) | ctz(enabled_interrupts));
+    throw trap_t((reg_t)ctz(enabled_interrupts));
   }
 }
 
@@ -659,7 +662,8 @@ void processor_t::set_csr(int which, reg_t val)
   reg_t supervisor_ints = supports_extension('S') ? MIP_SSIP | MIP_STIP | MIP_SEIP : 0;
   reg_t coprocessor_ints = (ext != NULL) << IRQ_COP;
   reg_t delegable_ints = supervisor_ints | coprocessor_ints;
-  reg_t all_ints = delegable_ints | MIP_MSIP | MIP_MTIP;
+  reg_t ibex_fints = 0x7fff0000;
+  reg_t all_ints = ibex_fints | delegable_ints | MIP_MSIP | MIP_MTIP;
 
   if (which >= CSR_PMPADDR0 && which < CSR_PMPADDR0 + state.max_pmp) {
     // If no PMPs are configured, disallow access to all.  Otherwise, allow
@@ -714,9 +718,11 @@ void processor_t::set_csr(int which, reg_t val)
       VU.vxrm = (val & VCSR_VXRM) >> VCSR_VXRM_SHIFT;
       break;
     case CSR_MSTATUS: {
-      if ((val ^ state.mstatus) &
-          (MSTATUS_MPP | MSTATUS_MPRV | MSTATUS_SUM | MSTATUS_MXR))
-        mmu->flush_tlb();
+      // Latest spike checks if MMU support exists and then doesn't execute
+      // commented out code
+      //if ((val ^ state.mstatus) &
+      //    (MSTATUS_MPP | MSTATUS_MPRV | MSTATUS_SUM | MSTATUS_MXR))
+      //  mmu->flush_tlb();
 
       bool has_fs = supports_extension('S') || supports_extension('F')
                   || supports_extension('V');
@@ -724,7 +730,7 @@ void processor_t::set_csr(int which, reg_t val)
 
       reg_t mask = MSTATUS_MIE | MSTATUS_MPIE | MSTATUS_MPRV
                  | (supports_extension('S') ? (MSTATUS_SUM | MSTATUS_SIE | MSTATUS_SPIE) : 0)
-                 | MSTATUS_MXR | MSTATUS_TW | MSTATUS_TVM | MSTATUS_TSR
+                 | /*MSTATUS_MXR | MSTATUS_TW | MSTATUS_TVM | */MSTATUS_TSR
                  | (has_fs ? MSTATUS_FS : 0)
                  | (has_vs ? MSTATUS_VS : 0)
                  | (ext ? MSTATUS_XS : 0);
@@ -775,7 +781,6 @@ void processor_t::set_csr(int which, reg_t val)
       break;
     }
     case CSR_MINSTRET:
-    case CSR_MCYCLE:
       if (xlen == 32)
         state.minstret = (state.minstret >> 32 << 32) | (val & 0xffffffffU);
       else
@@ -787,9 +792,17 @@ void processor_t::set_csr(int which, reg_t val)
       state.minstret--;
       break;
     case CSR_MINSTRETH:
-    case CSR_MCYCLEH:
       state.minstret = (val << 32) | (state.minstret << 32 >> 32);
       state.minstret--; // See comment above.
+      break;
+    case CSR_MCYCLE:
+      if (xlen == 32)
+        state.mcycle = (state.mcycle >> 32 << 32) | (val & 0xffffffffU);
+      else
+        state.mcycle = val;
+      break;
+    case CSR_MCYCLEH:
+      state.mcycle = (val << 32) | (state.mcycle << 32 >> 32);
       break;
     case CSR_SCOUNTEREN:
       state.scounteren = val;
@@ -996,22 +1009,32 @@ reg_t processor_t::get_csr(int which)
         break;
       return (VU.vxsat << VCSR_VXSAT_SHIFT) | (VU.vxrm << VCSR_VXRM_SHIFT);
     case CSR_INSTRET:
-    case CSR_CYCLE:
       if (ctr_ok)
         return state.minstret;
       break;
+    case CSR_CYCLE:
+      if (ctr_ok)
+        return state.mcycle;
+      break;
     case CSR_MINSTRET:
-    case CSR_MCYCLE:
       return state.minstret;
+    case CSR_MCYCLE:
+      return state.mcycle;
     case CSR_INSTRETH:
-    case CSR_CYCLEH:
       if (ctr_ok && xlen == 32)
         return state.minstret >> 32;
       break;
+    case CSR_CYCLEH:
+      if (ctr_ok && xlen == 32)
+        return state.mcycle >> 32;
+      break;
     case CSR_MINSTRETH:
-    case CSR_MCYCLEH:
       if (xlen == 32)
         return state.minstret >> 32;
+      break;
+    case CSR_MCYCLEH:
+      if (xlen == 32)
+        return state.mcycle >> 32;
       break;
     case CSR_SCOUNTEREN: return state.scounteren;
     case CSR_MCOUNTEREN: return state.mcounteren;

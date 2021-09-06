@@ -203,7 +203,7 @@ static bool paddr_ok(reg_t addr)
   return (addr >> MAX_PADDR_BITS) == 0;
 }
 
-bool sim_t::mmio_load(reg_t addr, size_t len, uint8_t* bytes)
+bool sim_t::mmio_load(reg_t addr, size_t len, uint8_t* bytes, bool iside)
 {
   if (addr + len < addr || !paddr_ok(addr + len - 1))
     return false;
