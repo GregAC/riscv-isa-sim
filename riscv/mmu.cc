@@ -5,6 +5,8 @@
 #include "simif.h"
 #include "processor.h"
 
+#include <iostream>
+
 mmu_t::mmu_t(simif_t* sim, processor_t* proc)
  : sim(sim), proc(proc),
 #ifdef RISCV_ENABLE_DUAL_ENDIAN
@@ -69,8 +71,12 @@ reg_t mmu_t::translate(reg_t addr, reg_t len, access_type type, uint32_t xlate_f
   }
 
   reg_t paddr = walk(addr, type, mode, virt, hlvx) | (addr & (PGSIZE-1));
-  if (!pmp_ok(paddr, len, type, mode))
+  if (!pmp_ok(paddr, len, type, mode)) {
+    std::cout << "PMP access exception " << std::hex << addr << std::endl;
+    std::cout << std::dec;
     throw_access_exception(virt, addr, type);
+  }
+
   return paddr;
 }
 
@@ -117,8 +123,11 @@ reg_t reg_from_bytes(size_t len, const uint8_t* bytes)
 bool mmu_t::mmio_ok(reg_t addr, access_type type)
 {
   // Disallow access to debug region when not in debug mode
-  if (addr >= DEBUG_START && addr <= DEBUG_END && proc && !proc->state.debug_mode)
-    return false;
+  //if (addr >= DEBUG_START && addr <= DEBUG_END && proc && !proc->state.debug_mode) {
+  //  std::cout << "Debug region blocked! " << std::hex << addr << std::endl;
+  //  std::cout << std::dec;
+  //  return false;
+  //}
 
   return true;
 }
@@ -150,6 +159,8 @@ void mmu_t::load_slow_path(reg_t addr, reg_t len, uint8_t* bytes, uint32_t xlate
     else if (xlate_flags == 0)
       refill_tlb(addr, paddr, host_addr, LOAD);
   } else if (!mmio_load(paddr, len, bytes)) {
+    std::cout << "mmio_load failed " << std::hex << paddr << std::endl;
+    std::cout << std::dec;
     throw trap_load_access_fault((proc) ? proc->state.v : false, addr, 0, 0);
   }
 
@@ -222,6 +233,9 @@ bool mmu_t::pmp_ok(reg_t addr, reg_t len, access_type type, reg_t mode)
   if (!proc || proc->n_pmp == 0)
     return true;
 
+  std::cout << "Checking PMP for " << std::hex << addr << std::endl;
+  std::cout << std::dec;
+
   for (size_t i = 0; i < proc->n_pmp; i++) {
     // Check each 4-byte sector of the access
     bool any_match = false;
@@ -234,18 +248,28 @@ bool mmu_t::pmp_ok(reg_t addr, reg_t len, access_type type, reg_t mode)
     }
 
     if (any_match) {
+      std::cout << "PMP match is region " << i << std::endl;
       // If the PMP matches only a strict subset of the access, fail it
-      if (!all_match)
+      if (!all_match) {
+        std::cout << "Does not match all bytes, failing" << std::endl;
         return false;
+      }
 
-      return proc->state.pmpaddr[i]->access_ok(type, mode);
+      bool access_ok = proc->state.pmpaddr[i]->access_ok(type, mode);
+      std::cout << "Access_ok " << access_ok << std::endl;
+      return access_ok;
     }
   }
 
-  // in case matching region is not found
+  bool fall_through;
+
   const bool mseccfg_mml = proc->state.mseccfg->get_mml();
   const bool mseccfg_mmwp = proc->state.mseccfg->get_mmwp();
-  return ((mode == PRV_M) && (!mseccfg_mmwp) && ((!mseccfg_mml) || (type == LOAD) || (type == STORE)));
+  fall_through = ((mode == PRV_M) && (!mseccfg_mmwp) && ((!mseccfg_mml) || (type == LOAD) || (type == STORE)));
+
+  std::cout << "No match, fall through is " << fall_through << std::endl;
+
+  return fall_through;
 }
 
 reg_t mmu_t::pmp_homogeneous(reg_t addr, reg_t len)

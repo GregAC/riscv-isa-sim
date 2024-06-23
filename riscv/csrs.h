@@ -341,9 +341,13 @@ class mip_or_mie_csr_t: public csr_t {
 class mip_csr_t: public mip_or_mie_csr_t {
  public:
   mip_csr_t(processor_t* const proc, const reg_t addr);
+  virtual reg_t read_pre_val() const noexcept;
+  virtual void write_pre_val(const reg_t val) noexcept;
 
   // Does not log. Used by external things (clint) that wiggle bits in mip.
   void backdoor_write_with_mask(const reg_t mask, const reg_t val) noexcept;
+ protected:
+  reg_t pre_val;
  private:
   virtual reg_t write_mask() const noexcept override;
 };

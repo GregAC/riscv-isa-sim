@@ -374,7 +374,7 @@ private:
       throw trap_t(((reg_t)1 << get_isa().get_max_xlen()) - 1 - NMI_INTERRUPT_NUM);
     }
 
-    take_interrupt(state.mip->read() & state.mie->read());
+    take_interrupt(state.mip->read_pre_val() & state.mie->read());
   }
   void take_interrupt(reg_t mask); // take first enabled interrupt in mask
   void take_trap(trap_t& t, reg_t epc); // take an exception
